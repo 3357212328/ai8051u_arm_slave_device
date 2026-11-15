@@ -37,9 +37,9 @@ AI8051U 是 STC 推出的增强型 8051 内核单片机，集成 **MDU32**（32�
 
 | 文件 | 说明 |
 |------|------|
-| [AI8051U_32_MDU32.LIB](AI8051U_32_MDU32.LIB) | 32位硬件乘除法单元库 |
-| [AI8051U_32_TFPU.LIB](AI8051U_32_TFPU.LIB) | 三角函数浮点运算单元库 |
-| [stc_usb_cdc_32g.LIB](stc_usb_cdc_32g.LIB) | USB-CDC 虚拟串口通讯库 |
+| [MDU32_C251.LIB](MDU32_C251.LIB) | 32位硬件乘除法单元库 (C251) |
+| [TFPU_C251.LIB](TFPU_C251.LIB) | 三角函数/浮点运算单元库 (C251) |
+| [stc_usb_cdc_32g.LIB](stc_usb_cdc_32g.LIB) | USB-CDC 虚拟串口通讯库 (本工程未使用) |
 
 ### 库函数独立例程
 
@@ -217,25 +217,137 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 
 ```
 .
-├── main.c                    # 主程序
+├── main.c                    # 主程序 (机械臂从机应用)
 ├── ai8051u_templete.uvproj   # Keil 项目文件
-├── AI8051U_32_MDU32.LIB      # MDU 运算库
-├── AI8051U_32_TFPU.LIB       # TFPU 运算库
-├── stc_usb_cdc_32g.LIB       # USB-CDC 通讯库
-├── set_adc.c / .h             # ADC 驱动
-├── set_eeprom.c / .h          # EEPROM 驱动
-├── set_i2c.c / .h             # I2C 驱动
-├── set_int.c / .h             # 外部中断
+├── build.bat                 # 一键编译脚本 (生成 build.log)
+├── MDU32_C251.LIB            # MDU 运算库
+├── TFPU_C251.LIB             # TFPU 运算库
+├── set_eeprom.c / .h          # EEPROM 驱动 (配置存储用)
+├── set_i2c.c / .h             # I2C 驱动 (PCA9685用)
 ├── set_io.c / .h             # IO 驱动
-├── set_pwm.c / .h             # PWM 驱动
-├── set_spi.c / .h             # SPI 驱动
-├── set_timer.c / .h           # 定时器驱动
-├── set_uart.c / .h            # 串口驱动
-├── set_task.c / .h            # 协程调度
-├── io_int.c / .h              # IO 独立中断
+├── set_timer.c / .h           # 定时器驱动 (1ms节拍用)
+├── set_uart.c / .h            # 串口驱动 (CLI用)
+├── delay.c / .h               # 40MHz 校准延时 (硬件模块)
+├── flash_if.c / .h            # EEPROM 配置存储 (硬件模块)
+├── pca9685.c / .h             # PCA9685 舵机驱动 (硬件模块)
+├── OLED.c / .h / OLED_Data.c / .h  # OLED 软I2C显示 (硬件模块)
+├── keypad.c / .h              # 4x4 矩阵键盘 (硬件模块)
+├── encoder.c / .h             # 旋转编码器 (软件正交解码) (硬件模块)
+├── DHT11.c / .h               # DHT11 温湿度 (硬件模块)
+├── Buzzer.c / .h              # 蜂鸣器 (硬件模块)
+├── uart.c / .h                # CLI 串口封装 (硬件模块)
 ├── .gitignore
 └── README.md
 ```
+
+> **已从工程移除的库文件**（文件保留在磁盘，仅不再编译）：
+> `set_adc`、`set_pwm`、`set_spi`、`set_task`、`set_int`、`io_int`、`stc_usb_cdc_32g.LIB`。
+> 本次移植的机械臂应用用不到它们；如需恢复，在 Keil 工程中重新添加即可。
+
+---
+
+## 三、STM32 机械臂从机 → AI8051U 移植
+
+将 `D:\kecheng\arm_slave_device`（STM32F401 机械臂从机）完整移植到 AI8051U 32 位模式。
+
+### 3.1 硬件资源分配
+
+| 功能 | AI8051U 引脚 | 说明 |
+|------|-------------|------|
+| OLED (软件I2C) | P0.0 = SCL, P0.1 = SDA | 开漏输出 + 内部上拉 |
+| PCA9685 (硬件I2C0) | P2.4 = SCL, P2.3 = SDA | `set_i2c_mode(I2c0, "400khz", I2c_P24_3)` |
+| 矩阵键盘 4x4 | 行 P1.0~P1.3 (输出), 列 P1.4~P1.7 (输入上拉) | |
+| 旋转编码器 | A=P4.2, B=P4.3, 按键=P4.4 | 软件正交解码 (1ms中断采样) |
+| DHT11 温湿度 | P2.0 | 准双向口单总线 |
+| 蜂鸣器 | P2.1 | 推挽输出, 低电平触发 |
+| CLI 串口 UART1 | P3.0 = RXD, P3.1 = TXD | 115200, 8N1 |
+
+> 注：主频 40MHz；`set_timer_fosc/set_uart_fosc/set_i2c_fosc(40000000)` 已通知各库函数主频。
+
+### 3.2 系统时钟与加速
+
+- **主频**: 40MHz 内部高速IRC (HIRC)。`Clock_Init()` 读取芯片出厂校准值
+  (`CHIPID18`/`CHIPID24`) 动态切换，无需外部晶振。
+- **TFPU / MDU32**: 库文件已加入工程，浮点与 32 位乘除自动使用硬件加速
+  （如 `pca9685.c` 中的 PWM 计算）。
+- **TFPU 120MHz**: `TFPU_Init()` 用 PLL 为 TFPU 提供 120MHz 时钟
+  （PLL 输入 = 40MHz/4 = 10MHz，CKMS=1 十二倍频到 120MHz），CPU 仍为 40MHz。
+  `DMAIR` 命令寄存器只能在优化等级 ≥1 下生成 `MOV DMAIR,#N` 立即数指令，
+  因此该函数使用 `#pragma OPTIMIZE(3)`；若改成等级 0，TFPU 初始化会静默失效，
+  第一次浮点运算可能返回 0。
+- **edata 快速变量**: 舵机角度、平滑移动、播放定时、编码器计数等速度敏感
+  全局变量显式声明为 `edata`（片内 2KB 高速RAM）；大块数据
+  （`SystemConfig_t` 3647B、OLED 显存 1KB）显式放 `xdata`。
+
+### 3.3 EEPROM 配置存储
+
+配置（含 200 步动作序列）存放在片内 EEPROM 起始地址 `0x0000`，占用 8 个扇区（4KB）。
+
+> ⚠️ **必须在 STC-ISP 下载时把 "EEPROM大小" 设置为 ≥ 4K（建议 8K）**，
+> 否则写入会失败。下载时主频可保持默认（程序内会自动切到 40MHz）。
+
+### 3.4 串口 CLI
+
+波特率 **115200, 8N1**（`uart.h` 中 `UART_BAUDRATE` 可改）。上电后打印：
+
+```
+--- Robotic Arm CLI Ready (ACK Mode) ---
+> 
+```
+
+常用命令：`help`、`status`、`angle <s> <a>`、`rec_step`、`play`/`stop`/`pause`/`resume`、
+`set_thresh <t> <h>`、`servo on/off <s>`、`speed <0.5|1|2>`、`sync on/off`、`reset_system` 等。
+
+### 3.5 移植说明
+
+- 源码逻辑与 STM32 原工程一一对应（模式机 / 菜单 / 播放 / 报警 / 状态上报）。
+- 适配 Keil C251 特性：16 位 `int`、`snprintf`→`sprintf`、C89 风格声明、
+  保留字 `data` 不可作标识符等。
+- 编码器由硬件 TIM3 编码器模式改为软件正交解码（1ms 节拍采样），
+  行为与原版一致（每格计数/2）。
+- `g_sys_tick_count` 由 Timer0 1ms 中断驱动（`set_timer_isr`），同时采样编码器。
+
+### 3.6 构建与验证结果
+
+- 构建命令：`build.bat`（内部调用 `UV4.exe -r`，生成 `build.log`）。
+- 当前构建：**0 Error(s), 0 Warning(s)**，HEX 已生成：
+  `data=8.2  edata+hdata=1386  xdata=9903  const=6698  code=27553`
+  （edata 2KB 内、code+const 约 34KB / 64KB）。
+- 已修复的移植/继承缺陷：
+  - 播放平滑移动按实际经过时间补步（主循环 ~55–80ms，原 20ms 步进不会卡死）；
+  - 串口 CLI 跨 DMA 帧累积，只有收到 `\r`/`\n` 才返回完整命令，支持一帧多行、退格(BS/DEL)；
+  - 显式打开 UART1 的 `ES`，并在库中断里清 `RI/TI`，否则超时中断收不到或反复重入；
+  - 报警界面补上 `OLED_Update()`（STM32 原版漏写，只写显存不上屏）；
+  - 报警持续时每轮重新 `Buzzer_On()`，避免被其他界面的短鸣关掉后再不响；
+  - 进入录制 / 编辑步骤确认 / 编辑取消 / 初始角度取消时，先把机械臂平滑移动到目标姿态，
+    再更新 `servo_angles`，避免"内存角度与实际位置不一致、第一次微调突然跳动"；
+  - 上电、菜单应用舵机掩码、串口 `servo on` 后立即输出一次 PWM，
+    避免新启用通道没有脉冲、舵机不动；
+  - `servo off` / 舵机设置里关闭通道时写 PCA9685 `FULL_OFF`，真正停止脉冲、释放舵机；
+  - I2C 命令超时后复位 I2C 状态机和命令队列，避免一次总线异常后永久卡死；
+  - `CKCON=1`，避免串口 DMA 与 CPU 同时访问 xdata 时的总线竞争（官方 DMA 例程同款设置）；
+  - 播放速度菜单只在确认时写 EEPROM（原先每格编码器都擦写 8 个扇区），取消可恢复原值。
+- 已核对：TFPU 初始化在 HEX 中为 `75 ED 3F / 75 ED 31 / 75 ED 32`
+  （`MOV DMAIR,#imm`），且只出现一次。
+
+### 3.7 上机前检查
+
+1. **STC-ISP 下载**：EEPROM 大小设为 ≥4K（建议 8K）；主频按默认即可。
+2. **编码器方向**：软件正交解码；若转动方向与预期相反，交换 A/B 相定义
+   （P4.2 / P4.3）或在 `Encoder_Tick()` 中取反计数。
+3. **TFPU 超频**：TFPU 工作于 120MHz，超过数据手册 108MHz 上限；
+   若出现浮点异常，把 `TFPU_Init()` 的 PLL 档位/分频调整为 ≤108MHz。
+4. **串口**：115200, 8N1（STM32 原工程为 9600，上位机需同步修改）。
+5. **OLED 刷新**：整屏软件 I2C 刷新约 20ms，主循环含 `delay_ms(30)` 约 55–80ms；
+   按键/编码器响应以此为上限，属正常现象。
+6. **PCA9685 供电**：舵机电源与 MCU 电源共地，舵机建议独立 5–6V 供电。
+7. **I2C 超时恢复**：`set_i2c_recover()` 只复位状态机与命令队列，不主动释放总线。
+   若 PCA9685 板把 SDA 拉低导致每次写都跑满 20ms 超时，先断电重启；
+   长期方案是加一段 9 个 SCL 时钟 + STOP 的总线释放。
+8. **栈深度**：`?STACK` 为默认 256B（EDATA 0x474–0x573，总 EDATA 1386B/2048B，
+   余 652B）。若上机出现异常复位或变量被踩，优先加大栈（本项目未使用递归）。
+
+---
 
 ## 许可证
 

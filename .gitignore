@@ -1,6 +1,10 @@
 # Build output
 Listings/
 Objects/
+build.log
+
+# Editor / tool logs
+.vscode/*.log
 
 # UVision user-specific files
 *.uvgui.*

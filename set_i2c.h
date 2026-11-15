@@ -63,6 +63,9 @@ void set_i2c_cmd(i2c_name i2c, int task_num, ...);
 //获取i2c的状态，输入参数为i2c_name，和task_num，检测到当前任务完成后返回1，否则返回0
 char get_i2c_state(i2c_name i2c, int task_num);
 
+//I2C 命令超时后调用: 清空命令队列和状态机, 重新使能 I2C
+void set_i2c_recover(i2c_name i2c);
+
 // 用于设置I2C的时钟频率，传入的是系统时钟频率，单位是Hz
 // 一般来说不用管，设置的时候会自动设置
 void set_i2c_fosc(long fosc);

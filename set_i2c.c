@@ -91,7 +91,7 @@ void set_i2c_mode(i2c_name i2c, ...)
     I2CPSCR = (MSSPEED >> 6)&0xff;//保留高八位
     I2CMSCR |= 0x80;//允许主机模式的中断
     I2C_S0 = (i2c_sw&1);I2C_S1 = ((i2c_sw>>1)&1);//设置引脚切换方式
-    memset(i2c_cmd_list,0,Max_I2c_Cmd*Max_I2c_Task);//清空所有参数
+    memset(i2c_cmd_list,0,sizeof(i2c_cmd_list));//清空所有参数
     va_end(args); // 清理可变参数列表
 }
 
@@ -132,38 +132,40 @@ void set_i2c_cmd(i2c_name i2c, int task_num, ...)
     int cnt = 1;          //命令计数器
     va_list args;         // 可变参数列表
     va_start(args, i2c); // 初始化可变参数列表
-    if (task_num < Max_I2c_Task||i2c_cmd_list[task_num][0] != State_Idle)//任务数量超过或者当前任务状态非空闲则跳过
+    if (task_num < 0 || task_num >= Max_I2c_Task || i2c_cmd_list[task_num][0] != State_Idle)
+    {//任务数量超过或者当前任务状态非空闲则跳过
+        va_end(args);
+        return;
+    }
+    i2c_cmd_list[task_num][0] = State_Running;//标明
+    while (1)
     {
-        i2c_cmd_list[task_num][0] = State_Running;//标明
-				while (1)
-				{
-						str = va_arg(args, int);
-						if (str == Cmd_End){i2c_cmd_list[task_num][cnt++] = Cmd_End;break;}//遇到哨兵值，结束循环
-						if (cnt>(Max_I2c_Cmd-3)){i2c_cmd_list[task_num][0] = State_Idle;break;}// 超出最大长度，则取消本次装载
-						switch (str)
-						{
-						case Start:case Rack:case Tack:case Tnak:case Stop://后面不带数据的
-						i2c_cmd_list[task_num][cnt++] = (unsigned long)str;break;
-						case Tx_Dat:case S_Tx_Rack:case Tx_Rack://后面带一个char数据的
-						i2c_cmd_list[task_num][cnt++] = (unsigned long)str;
-						in_dat = va_arg(args, int);
-						i2c_cmd_list[task_num][cnt++] = (unsigned long)in_dat;break;
-						case Rx_Dat:case Rx_Tack:case Rx_Tnak://后面带一个char类型地址的
-						i2c_cmd_list[task_num][cnt++] = (unsigned long)str;
-						arg = va_arg(args, char *);
-						i2c_cmd_list[task_num][cnt++] = (unsigned long)arg;break;
-						default:i2c_cmd_list[task_num][0] = State_Idle;break;
-						//遇到非法数据，则取消本次装载
-						}
-				}
-				//装载完成，根据当前运行状态来选择是否拉起一次运行
-				if(_i2c_state == State_Idle)
-				{
-						i2c_task_p = task_num;
-						i2c_cmd_p = 1;
-						_i2c_state = State_Running;
-						run_i2c_cmd();
-				}
+        str = va_arg(args, int);
+        if (str == Cmd_End){i2c_cmd_list[task_num][cnt++] = Cmd_End;break;}//遇到哨兵值，结束循环
+        if (cnt>(Max_I2c_Cmd-3)){i2c_cmd_list[task_num][0] = State_Idle;break;}// 超出最大长度，则取消本次装载
+        switch (str)
+        {
+        case Start:case Rack:case Tack:case Tnak:case Stop://后面不带数据的
+        i2c_cmd_list[task_num][cnt++] = (unsigned long)str;break;
+        case Tx_Dat:case S_Tx_Rack:case Tx_Rack://后面带一个char数据的
+        i2c_cmd_list[task_num][cnt++] = (unsigned long)str;
+        in_dat = va_arg(args, int);
+        i2c_cmd_list[task_num][cnt++] = (unsigned long)in_dat;break;
+        case Rx_Dat:case Rx_Tack:case Rx_Tnak://后面带一个char类型地址的
+        i2c_cmd_list[task_num][cnt++] = (unsigned long)str;
+        arg = va_arg(args, char *);
+        i2c_cmd_list[task_num][cnt++] = (unsigned long)arg;break;
+        default:i2c_cmd_list[task_num][0] = State_Idle;break;
+        //遇到非法数据，则取消本次装载
+        }
+    }
+    //装载完成，根据当前运行状态来选择是否拉起一次运行
+    if(_i2c_state == State_Idle)
+    {
+        i2c_task_p = task_num;
+        i2c_cmd_p = 1;
+        _i2c_state = State_Running;
+        run_i2c_cmd();
     }
     va_end(args); // 清理可变参数列表
 }
@@ -171,7 +173,7 @@ void set_i2c_cmd(i2c_name i2c, int task_num, ...)
 char get_i2c_state(i2c_name i2c, int task_num)
 {
     char state = 0;
-    if(task_num>Max_I2c_Task)return 0;//超出最大任务数，则返回
+    if(task_num < 0 || task_num >= Max_I2c_Task)return 0;//超出最大任务数，则返回
     if(i2c == I2c0)
     {
         state = i2c_cmd_list[task_num][0]; // 获取中断状态,运行中为2，运行完成为1，空闲为0
@@ -179,6 +181,32 @@ char get_i2c_state(i2c_name i2c, int task_num)
         i2c_cmd_list[task_num][0] = State_Idle;         // 清除中断标志缓存
     }
     return state;                     // 返回中断状态
+}
+
+// I2C 命令执行超时后的恢复:
+// 清空任务队列/状态机并重新使能 I2C, 否则 _i2c_state 永远停在 State_Running,
+// 之后所有 set_i2c_cmd 都不会真正启动, 每次调用都白等到超时.
+void set_i2c_recover(i2c_name i2c)
+{
+    int i;
+    bit ea_save;
+
+    if (i2c != I2c0) return;
+    ea_save = EA;
+    EA = 0;                                  // 防止半复位状态被 I2C 中断访问
+    for (i = 0; i < Max_I2c_Task; i++)
+    {
+        i2c_cmd_list[i][0] = State_Idle;
+    }
+    i2c_cmd_p = 0;
+    i2c_task_p = 0;
+    i2c_read_flag = 0;
+    _i2c_state = State_Idle;
+    I2CMSCR &= 0x80;                         // 保留中断允许位, 清除 MSCMD 命令
+    I2CMSST = 0x00;                          // 清 MSIF 中断标志
+    I2CCFG &= ~0x80;                         // 关闭 I2C, 复位内部状态机
+    I2CCFG |= 0x80;                          // 按原配置重新使能
+    EA = ea_save;
 }
 
 void i2c_isr(void) interrupt I2C_VECTOR

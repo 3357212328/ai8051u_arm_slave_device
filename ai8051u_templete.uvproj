@@ -125,7 +125,7 @@
             <Oh166RecLen>16</Oh166RecLen>
           </OPTHX>
           <Simulator>
-            <UseSimulator>1</UseSimulator>
+            <UseSimulator>0</UseSimulator>
             <LoadApplicationAtStartup>1</LoadApplicationAtStartup>
             <RunToMain>1</RunToMain>
             <RestoreBreakpoints>1</RestoreBreakpoints>
@@ -137,9 +137,9 @@
             <RestoreSysVw>1</RestoreSysVw>
           </Simulator>
           <Target>
-            <UseTarget>0</UseTarget>
+            <UseTarget>1</UseTarget>
             <LoadApplicationAtStartup>1</LoadApplicationAtStartup>
-            <RunToMain>0</RunToMain>
+            <RunToMain>1</RunToMain>
             <RestoreBreakpoints>1</RestoreBreakpoints>
             <RestoreWatchpoints>1</RestoreWatchpoints>
             <RestoreMemoryDisplay>1</RestoreMemoryDisplay>
@@ -149,7 +149,7 @@
             <RestoreSysVw>1</RestoreSysVw>
           </Target>
           <RunDebugAfterBuild>0</RunDebugAfterBuild>
-          <TargetSelection>-1</TargetSelection>
+          <TargetSelection>1</TargetSelection>
           <SimDlls>
             <CpuDll></CpuDll>
             <CpuDllArguments></CpuDllArguments>
@@ -163,7 +163,7 @@
             <PeripheralDll></PeripheralDll>
             <PeripheralDllArguments></PeripheralDllArguments>
             <InitializationFile></InitializationFile>
-            <Driver></Driver>
+            <Driver>BIN\STCMON251.DLL</Driver>
           </TargetDlls>
         </DebugOption>
         <Utilities>
@@ -332,28 +332,113 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>library</GroupName>
+          <GroupName>hardware</GroupName>
           <Files>
             <File>
-              <FileName>io_int.c</FileName>
+              <FileName>delay.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\io_int.c</FilePath>
+              <FilePath>.\delay.c</FilePath>
             </File>
             <File>
-              <FileName>io_int.h</FileName>
+              <FileName>delay.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\io_int.h</FilePath>
+              <FilePath>.\delay.h</FilePath>
             </File>
             <File>
-              <FileName>set_adc.c</FileName>
+              <FileName>flash_if.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\set_adc.c</FilePath>
+              <FilePath>.\flash_if.c</FilePath>
             </File>
             <File>
-              <FileName>set_adc.h</FileName>
+              <FileName>flash_if.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\set_adc.h</FilePath>
+              <FilePath>.\flash_if.h</FilePath>
             </File>
+            <File>
+              <FileName>pca9685.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\pca9685.c</FilePath>
+            </File>
+            <File>
+              <FileName>pca9685.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\pca9685.h</FilePath>
+            </File>
+            <File>
+              <FileName>OLED.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\OLED.c</FilePath>
+            </File>
+            <File>
+              <FileName>OLED.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\OLED.h</FilePath>
+            </File>
+            <File>
+              <FileName>OLED_Data.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\OLED_Data.c</FilePath>
+            </File>
+            <File>
+              <FileName>OLED_Data.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\OLED_Data.h</FilePath>
+            </File>
+            <File>
+              <FileName>keypad.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\keypad.c</FilePath>
+            </File>
+            <File>
+              <FileName>keypad.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\keypad.h</FilePath>
+            </File>
+            <File>
+              <FileName>encoder.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\encoder.c</FilePath>
+            </File>
+            <File>
+              <FileName>encoder.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\encoder.h</FilePath>
+            </File>
+            <File>
+              <FileName>DHT11.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\DHT11.c</FilePath>
+            </File>
+            <File>
+              <FileName>DHT11.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\DHT11.h</FilePath>
+            </File>
+            <File>
+              <FileName>Buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>Buzzer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Buzzer.h</FilePath>
+            </File>
+            <File>
+              <FileName>uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\uart.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>library</GroupName>
+          <Files>
             <File>
               <FileName>set_eeprom.c</FileName>
               <FileType>1</FileType>
@@ -375,16 +460,6 @@
               <FilePath>.\set_i2c.h</FilePath>
             </File>
             <File>
-              <FileName>set_int.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\set_int.c</FilePath>
-            </File>
-            <File>
-              <FileName>set_int.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\set_int.h</FilePath>
-            </File>
-            <File>
               <FileName>set_io.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\set_io.c</FilePath>
@@ -393,36 +468,6 @@
               <FileName>set_io.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\set_io.h</FilePath>
-            </File>
-            <File>
-              <FileName>set_pwm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\set_pwm.c</FilePath>
-            </File>
-            <File>
-              <FileName>set_pwm.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\set_pwm.h</FilePath>
-            </File>
-            <File>
-              <FileName>set_spi.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\set_spi.c</FilePath>
-            </File>
-            <File>
-              <FileName>set_spi.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\set_spi.h</FilePath>
-            </File>
-            <File>
-              <FileName>set_task.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\set_task.c</FilePath>
-            </File>
-            <File>
-              <FileName>set_task.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>.\set_task.h</FilePath>
             </File>
             <File>
               <FileName>set_timer.c</FileName>
@@ -445,19 +490,14 @@
               <FilePath>.\set_uart.h</FilePath>
             </File>
             <File>
-              <FileName>AI8051U_32_MDU32.LIB</FileName>
+              <FileName>TFPU_C251.LIB</FileName>
               <FileType>4</FileType>
-              <FilePath>.\AI8051U_32_MDU32.LIB</FilePath>
+              <FilePath>.\TFPU_C251.LIB</FilePath>
             </File>
             <File>
-              <FileName>AI8051U_32_TFPU.LIB</FileName>
+              <FileName>MDU32_C251.LIB</FileName>
               <FileType>4</FileType>
-              <FilePath>.\AI8051U_32_TFPU.LIB</FilePath>
-            </File>
-            <File>
-              <FileName>stc_usb_cdc_32g.LIB</FileName>
-              <FileType>4</FileType>
-              <FilePath>.\stc_usb_cdc_32g.LIB</FilePath>
+              <FilePath>.\MDU32_C251.LIB</FilePath>
             </File>
           </Files>
         </Group>

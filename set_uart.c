@@ -220,7 +220,20 @@ char get_uart_state(uart_name num)
 }
 
 //中断函数部分
+//注意: 打开 ES 后, RI/TI 也会进入本中断; 库原来只处理超时标志,
+//若不清 RI/TI 会反复重入(死循环)。DMA 收发不依赖这两个标志位,
+//清掉它们是安全的(官方 DMA 例程同样在中断里清 RI)。
+#define UART_RI_1 RI
+#define UART_RI_2 S2RI
+#define UART_RI_3 S3RI
+#define UART_RI_4 S4RI
+#define UART_TI_1 TI
+#define UART_TI_2 S2TI
+#define UART_TI_3 S3TI
+#define UART_TI_4 S4TI
 #define uart_isr(n) void uart##n##_isr(void) interrupt UART##n##_VECTOR { \
+    if(UART_RI_##n) { UART_RI_##n = 0; } \
+    if(UART_TI_##n) { UART_TI_##n = 0; } \
     if(UR##n##TOSR & 0x01) \
     { \
         DMA_UR##n##R_STA = 0x00; \
