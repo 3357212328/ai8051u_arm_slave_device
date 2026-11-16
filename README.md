@@ -313,7 +313,7 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 
 - 构建命令：`build.bat`（内部调用 `UV4.exe -r`，生成 `build.log`）。
 - 当前构建：**0 Error(s), 0 Warning(s)**，HEX 已生成：
-  `data=8.2  edata+hdata=1386  xdata=9903  const=6698  code=27553`
+  `data=8.2  edata+hdata=1386  xdata=9903  const=6698  code=27563`
   （edata 2KB 内、code+const 约 34KB / 64KB）。
 - 已修复的移植/继承缺陷：
   - 播放平滑移动按实际经过时间补步（主循环 ~55–80ms，原 20ms 步进不会卡死）；
@@ -328,7 +328,9 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
   - `servo off` / 舵机设置里关闭通道时写 PCA9685 `FULL_OFF`，真正停止脉冲、释放舵机；
   - I2C 命令超时后复位 I2C 状态机和命令队列，避免一次总线异常后永久卡死；
   - `CKCON=1`，避免串口 DMA 与 CPU 同时访问 xdata 时的总线竞争（官方 DMA 例程同款设置）；
-  - 播放速度菜单只在确认时写 EEPROM（原先每格编码器都擦写 8 个扇区），取消可恢复原值。
+  - 播放速度菜单只在确认时写 EEPROM（原先每格编码器都擦写 8 个扇区），取消可恢复原值；
+  - `Clock_Init()` 的 HIRC 稳定位等待改为带超时（`while (!(HIRCCR & 1) && --hirc_wait);`）：
+    真机上该位数十 us 内即置位，行为不变；Keil 仿真器不模拟该位，无超时会永远卡死。
 - 已核对：TFPU 初始化在 HEX 中为 `75 ED 3F / 75 ED 31 / 75 ED 32`
   （`MOV DMAIR,#imm`），且只出现一次。
 
@@ -348,6 +350,19 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
    长期方案是加一段 9 个 SCL 时钟 + STOP 的总线释放。
 8. **栈深度**：`?STACK` 为默认 256B（EDATA 0x474–0x573，总 EDATA 1386B/2048B，
    余 652B）。若上机出现异常复位或变量被踩，优先加大栈（本项目未使用递归）。
+
+---
+
+## 仿真调试（Keil Simulator）
+
+没有实物板时，可以直接用 Keil 的软件仿真运行本工程：
+
+1. 打开 `ai8051u_templete.uvproj`，`Ctrl+F5` 进入调试；
+2. 仿真器按 `sim\debug_sim.ini` 自动映射 XFR 区、添加 Watch 表达式、停在 `main()`；
+3. 按 `F5` 即可跑到主循环（`draw_ui()`），可下断点、单步、改变量。
+
+详细说明、仿真器限制（无 TFPU / OLED / PCA9685 / DHT11 模型、tick 偏慢等）
+以及如何切回"真机在线调试"见 **[sim/README.md](sim/README.md)**。
 
 ---
 

@@ -263,8 +263,11 @@ void main(void)
  */
 void Clock_Init(void)
 {
+    uint16_t hirc_wait = 0;
     HIRCCR = 0x80;                    // 启动内部高速IRC
-    while (!(HIRCCR & 1));            // 等待稳定
+    /* 等待HIRC稳定位; 带超时保护: Keil仿真器不模拟HIRCCR的稳定位,
+       若为死等则仿真永远停在此处 (真机上该位在数十us内即置位) */
+    while (!(HIRCCR & 1) && --hirc_wait);
     CLKDIV = 0x04;                    // 切换前先降频, 防止频率跳变时跑飞
     IRTRIM = CHIPID18;                // 40MHz IRC 频率校准值
     VRTRIM = CHIPID24;                // 44M 频段电压校准值 (40MHz 属于该频段)
