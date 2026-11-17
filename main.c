@@ -565,12 +565,22 @@ void Check_Environment_And_Alarm(void)
 // ====================================================================
 //                   6. 逻辑处理句柄
 // ====================================================================
+/* 串口虚拟输入: key / enc 命令把按键和编码器增量注入主循环,
+   与真实按键/编码器走完全相同的处理路径 (光标/选中/数值) */
+static uint8_t s_serial_key_pending = 0;
+static int16_t s_serial_enc_pending = 0;
+
 void Check_And_Process_Serial(void)
 {
     char cmd_buffer[RX_BUFFER_SIZE];
-    if (UART_GetCommand(cmd_buffer)) {
-        process_serial_command(cmd_buffer);
-        UART_SendString("> ");
+    uint8_t port;
+
+    /* UART1 与 UART4 功能完全一致: 两路都轮询, 响应广播回两路 */
+    for (port = 0; port < UART_PORT_COUNT; port++) {
+        if (UART_GetCommand(port, cmd_buffer)) {
+            process_serial_command(cmd_buffer);
+            UART_SendString("> ");
+        }
     }
 }
 
@@ -584,11 +594,13 @@ void process_serial_command(char* cmd)
 
     if (strcmp(cmd, "help") == 0) {
         UART_SendString("--- Robotic Arm CLI ---\r\n");
+        UART_SendString("Ports: UART1 (P3.0/P3.1) + UART4 (P0.2/P0.3), 115200 8N1\r\n");
         UART_SendString("System: help, status, reset_arm, reset_system, sync on/off\r\n");
         UART_SendString("Manual: angle <s> <a> (s=servo 1-16, a=angle 0-180)\r\n");
         UART_SendString("Record: rec_step, rec_insert <i>, rec_delay <d>, rec_clear\r\n");
         UART_SendString("Playback: play, stop, pause, resume\r\n");
         UART_SendString("Setup: servo on/off <s>, servo_save, set_thresh <t> <h>, speed <0.5|1|2>\r\n");
+        UART_SendString("Remote: key <up|down|ok|cancel|info|stop|reset|sysreset>, enc <n>\r\n");
     } else if (strcmp(cmd, "status") == 0) {
         Send_Status_Update();
     } else if (strcmp(cmd, "sync on") == 0) {
@@ -738,6 +750,39 @@ void process_serial_command(char* cmd)
         Flash_Write_Config(&g_config);
         sprintf(response, "OK: Speed set to %d.%dx.\r\n", s_speed_x10[idx] / 10, s_speed_x10[idx] % 10);
         UART_SendString(response);
+    } else if (strcmp(cmd, "key up") == 0) {
+        s_serial_key_pending = KEY_UP;
+        UART_SendString("OK: KEY_UP queued.\r\n");
+    } else if (strcmp(cmd, "key down") == 0) {
+        s_serial_key_pending = KEY_DOWN;
+        UART_SendString("OK: KEY_DOWN queued.\r\n");
+    } else if (strcmp(cmd, "key ok") == 0) {
+        s_serial_key_pending = KEY_CONFIRM;
+        UART_SendString("OK: KEY_CONFIRM queued.\r\n");
+    } else if (strcmp(cmd, "key cancel") == 0) {
+        s_serial_key_pending = KEY_CANCEL;
+        UART_SendString("OK: KEY_CANCEL queued.\r\n");
+    } else if (strcmp(cmd, "key info") == 0) {
+        s_serial_key_pending = KEY_INFO;
+        UART_SendString("OK: KEY_INFO queued.\r\n");
+    } else if (strcmp(cmd, "key stop") == 0) {
+        s_serial_key_pending = KEY_STOP;
+        UART_SendString("OK: KEY_STOP queued.\r\n");
+    } else if (strcmp(cmd, "key reset") == 0) {
+        s_serial_key_pending = KEY_RESET;
+        UART_SendString("OK: KEY_RESET queued.\r\n");
+    } else if (strcmp(cmd, "key sysreset") == 0) {
+        s_serial_key_pending = KEY_SYS_RESET;
+        UART_SendString("OK: KEY_SYS_RESET queued.\r\n");
+    } else if (sscanf(cmd, "enc %d", &d) == 1) {
+        /* 虚拟编码器: +n 增大 / -n 减小, 单次限幅 ±100 格 */
+        if (d > 100) d = 100;
+        if (d < -100) d = -100;
+        s_serial_enc_pending = (int16_t)(s_serial_enc_pending + (int16_t)d);
+        if (s_serial_enc_pending > 200) s_serial_enc_pending = 200;
+        if (s_serial_enc_pending < -200) s_serial_enc_pending = -200;
+        sprintf(response, "OK: encoder %d step(s) queued.\r\n", d);
+        UART_SendString(response);
     } else {
         UART_SendString("ERROR: Unknown command.\r\n");
     }
@@ -748,7 +793,19 @@ void handle_input(void)
 {
     uint8_t key = Keypad_Scan();
     int16_t encoder_delta = (int16_t)(Encoder_Get_Count() / 2);
-    uint8_t state_changed = (uint8_t)((key != 0 || encoder_delta != 0) ? 1 : 0);
+    uint8_t state_changed;
+
+    /* 合并串口注入的虚拟按键/编码器 (真实按键优先, 编码器累加) */
+    if (s_serial_key_pending != 0) {
+        if (key == 0) key = s_serial_key_pending;
+        s_serial_key_pending = 0;
+    }
+    if (s_serial_enc_pending != 0) {
+        encoder_delta = (int16_t)(encoder_delta + s_serial_enc_pending);
+        s_serial_enc_pending = 0;
+    }
+
+    state_changed = (uint8_t)((key != 0 || encoder_delta != 0) ? 1 : 0);
 
     if (key == KEY_RESET) { Arm_Set_To_Initial_Position(); if(sync_enabled) Send_Status_Update(); return; }
     if (key == KEY_SYS_RESET) {
