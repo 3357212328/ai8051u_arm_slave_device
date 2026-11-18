@@ -499,6 +499,11 @@
               <FileType>4</FileType>
               <FilePath>.\MDU32_C251.LIB</FilePath>
             </File>
+            <File>
+              <FileName>stc_usb_cdc_32g.LIB</FileName>
+              <FileType>4</FileType>
+              <FilePath>.\stc_usb_cdc_32g.LIB</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>

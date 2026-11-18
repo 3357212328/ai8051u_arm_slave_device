@@ -39,7 +39,7 @@ AI8051U 是 STC 推出的增强型 8051 内核单片机，集成 **MDU32**（32�
 |------|------|
 | [MDU32_C251.LIB](MDU32_C251.LIB) | 32位硬件乘除法单元库 (C251) |
 | [TFPU_C251.LIB](TFPU_C251.LIB) | 三角函数/浮点运算单元库 (C251) |
-| [stc_usb_cdc_32g.LIB](stc_usb_cdc_32g.LIB) | USB-CDC 虚拟串口通讯库 (本工程未使用) |
+| [stc_usb_cdc_32g.LIB](stc_usb_cdc_32g.LIB) | USB-CDC 虚拟串口通讯库 (本工程主 CLI 口) |
 
 ### 库函数独立例程
 
@@ -222,6 +222,7 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 ├── build.bat                 # 一键编译脚本 (生成 build.log)
 ├── MDU32_C251.LIB            # MDU 运算库
 ├── TFPU_C251.LIB             # TFPU 运算库
+├── stc_usb_cdc_32g.LIB       # USB-CDC 虚拟串口库
 ├── set_eeprom.c / .h          # EEPROM 驱动 (配置存储用)
 ├── set_i2c.c / .h             # I2C 驱动 (PCA9685用)
 ├── set_io.c / .h             # IO 驱动
@@ -235,13 +236,13 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 ├── encoder.c / .h             # 旋转编码器 (软件正交解码) (硬件模块)
 ├── DHT11.c / .h               # DHT11 温湿度 (硬件模块)
 ├── Buzzer.c / .h              # 蜂鸣器 (硬件模块)
-├── uart.c / .h                # CLI 串口封装 (UART1+UART4, 硬件模块)
+├── uart.c / .h                # CLI 主机接口封装 (USB-CDC + UART4, 硬件模块)
 ├── .gitignore
 └── README.md
 ```
 
 > **已从工程移除的库文件**（文件保留在磁盘，仅不再编译）：
-> `set_adc`、`set_pwm`、`set_spi`、`set_task`、`set_int`、`io_int`、`stc_usb_cdc_32g.LIB`。
+> `set_adc`、`set_pwm`、`set_spi`、`set_task`、`set_int`、`io_int`。
 > 本次移植的机械臂应用用不到它们；如需恢复，在 Keil 工程中重新添加即可。
 
 ---
@@ -262,8 +263,8 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 | 旋转编码器 | A=P4.2, B=P4.3, 按键=P4.4 | 软件正交解码 (1ms中断采样) |
 | DHT11 温湿度 | P2.0 | 准双向口单总线 |
 | 蜂鸣器 | P2.1 | 推挽输出, 低电平触发 |
-| CLI 串口 UART1 | P3.0 = RXD, P3.1 = TXD | 115200, 8N1 |
-| CLI 串口 UART4 | P0.2 = RXD4, P0.3 = TXD4 | 115200, 8N1（与 UART1 功能一致） |
+| CLI USB-CDC | P3.0 = D-, P3.1 = D+ | 电脑识别为虚拟串口, 无需 USB-TTL |
+| CLI UART4 | P0.2 = RXD4, P0.3 = TXD4 | 115200, 8N1（与 USB-CDC 功能一致） |
 
 > 注：主频 40MHz；`set_timer_fosc/set_uart_fosc/set_i2c_fosc(40000000)` 已通知各库函数主频。
 
@@ -281,6 +282,12 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 - **edata 快速变量**: 舵机角度、平滑移动、播放定时、编码器计数等速度敏感
   全局变量显式声明为 `edata`（片内 2KB 高速RAM）；大块数据
   （`SystemConfig_t` 3647B、OLED 显存 1KB）显式放 `xdata`。
+- **USB 时钟**: `UART_Init()` 把 `IRCBAND` 的 `USBCKS[1:0]` 设为 `10`，
+  USB 用专门的 **48MHz IRC**（`usb_init()` 内部使能并等待稳定），
+  **不占用 PLL**，与 TFPU 的 120MHz PLL 互不影响。
+  注意 `usb_init()` 会把 `USBCLK` 的 PLL 倍频位清零，因此
+  `System_Hardware_Init()` 里 **`UART_UsbInit()` 必须排在 `TFPU_Init()` 之前**；
+  UART4 的初始化（波特率要用浮点）则排在 `TFPU_Init()` 之后。
 
 ### 3.3 EEPROM 配置存储
 
@@ -289,18 +296,23 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 > ⚠️ **必须在 STC-ISP 下载时把 "EEPROM大小" 设置为 ≥ 4K（建议 8K）**，
 > 否则写入会失败。下载时主频可保持默认（程序内会自动切到 40MHz）。
 
-### 3.4 串口 CLI（UART1 + UART4 双路）
+### 3.4 主机接口（USB-CDC + UART4 双路）
 
-波特率 **115200, 8N1**（`uart.h` 中 `UART_BAUDRATE` 可改），两路接口功能完全一致：
+两路接口功能完全一致：**USB-CDC 虚拟串口**（P3.0/P3.1，默认口、下载口）
+和 **UART4 物理串口**（P0.2/P0.3，115200 8N1）。
 
 | 端口 | 引脚 | 说明 |
 |------|------|------|
-| UART1 | P3.0 = RXD, P3.1 = TXD | 板载 USB 转串口 / 下载口 |
-| UART4 | P0.2 = RXD4, P0.3 = TXD4 | 第二路主机接口（库引脚组 `Uart4_P02_3`） |
+| USB-CDC | P3.0 = D-, P3.1 = D+ | 插 USB 线即可, 波特率无关; 同一根线可下载/通信 |
+| UART4 | P0.2 = RXD4, P0.3 = TXD4 | 第二路主机接口（库引脚组 `Uart4_P02_3`）, 115200 8N1 |
 
+- USB-CDC 由 `AI_USB.H` + `stc_usb_cdc_32g.LIB` 实现，查询方式收发：
+  发送按 ≤64 字节分块并等待 `bUsbInBusy`，接收轮询 `bUsbOutReady` 后
+  从 `UsbOutBuffer[OutNumber]` 取数并调用 `usb_OUT_done()`。
 - 两路各自维护行缓冲（`uart.c`），任一端口收到的命令都走同一套解析；
   响应为**广播**，会同时发到两个端口。
-- 两路共用定时器 2 做波特率发生器，速率必须相同（均 115200）。
+- UART4 波特率 **115200, 8N1**（`uart.h` 中 `UART_BAUDRATE` 可改）；
+  USB-CDC 与波特率无关。
 - 上电后打印：
 
 ```
@@ -324,7 +336,7 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 | `key sysreset` | S2 | 系统复位（写 EEPROM） |
 | `enc <n>` | 旋转编码器 n 格 | `+` 增大 / `-` 减小，用于角度、延时、阈值、速度、序列索引等数值 |
 
-> 实现方式：`main.c` 的 `Check_And_Process_Serial()` 轮询 UART1/UART4；
+> 实现方式：`main.c` 的 `Check_And_Process_Serial()` 轮询 USB-CDC/UART4；
 > `key`/`enc` 命令只把按键码和编码器增量放入待处理变量，由 `handle_input()`
 > 与真实键盘/编码器输入合并后走完全相同的界面处理路径，因此所有 OLED 界面都可远程操作。
 
@@ -341,12 +353,12 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
 
 - 构建命令：`build.bat`（内部调用 `UV4.exe -r`，生成 `build.log`）。
 - 当前构建：**0 Error(s), 0 Warning(s)**，HEX 已生成：
-  `data=8.2  edata+hdata=1339  xdata=10032  const=7152  code=28311`
-  （edata 2KB 内、xdata 32KB 内、code+const 约 35KB / 64KB）。
+  `data=8.5  edata+hdata=1378  xdata=10224  const=7299  code=31553`
+  （edata 2KB 内、xdata 32KB 内、code+const 约 38KB / 64KB）。
 - 已修复的移植/继承缺陷：
   - 播放平滑移动按实际经过时间补步（主循环 ~55–80ms，原 20ms 步进不会卡死）；
   - 串口 CLI 跨 DMA 帧累积，只有收到 `\r`/`\n` 才返回完整命令，支持一帧多行、退格(BS/DEL)；
-  - 显式打开 UART1 的 `ES`，并在库中断里清 `RI/TI`，否则超时中断收不到或反复重入；
+  - 显式打开 UART4 的 `ES4`，并在库中断里清 `RI/TI`，否则超时中断收不到或反复重入；
   - 报警界面补上 `OLED_Update()`（STM32 原版漏写，只写显存不上屏）；
   - 报警持续时每轮重新 `Buzzer_On()`，避免被其他界面的短鸣关掉后再不响；
   - 进入录制 / 编辑步骤确认 / 编辑取消 / 初始角度取消时，先把机械臂平滑移动到目标姿态，
@@ -356,8 +368,11 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
   - `servo off` / 舵机设置里关闭通道时写 PCA9685 `FULL_OFF`，真正停止脉冲、释放舵机；
   - I2C 命令超时后复位 I2C 状态机和命令队列，避免一次总线异常后永久卡死；
   - `CKCON=1`，避免串口 DMA 与 CPU 同时访问 xdata 时的总线竞争（官方 DMA 例程同款设置）；
-  - 增加第二路 CLI：UART4（P0.2/P0.3）与 UART1 共用同一套命令解析，接收独立缓冲、
+  - 增加第二路 CLI：UART4（P0.2/P0.3）与 USB-CDC 共用同一套命令解析，接收独立缓冲、
     发送广播，并打开库未处理的 `ES4` 中断允许位；
+  - 主 CLI 口由 UART1（P3.0/P3.1 复用）改为 **USB-CDC 虚拟串口**（`AI_USB.H` +
+    `stc_usb_cdc_32g.LIB`，查询方式收发），P3.0/P3.1 不再配置成串口；
+    USB 时钟改用专用 IRC48M，`UART_Init()` 提前到 `TFPU_Init()` 之前执行；
   - `key <...>` / `enc <n>` 串口命令可远程模拟按键与编码器，用于控制 OLED 光标、
     选中项和各界面数值；注入输入与真实键盘/编码器走同一处理路径；
   - 播放速度菜单只在确认时写 EEPROM（原先每格编码器都擦写 8 个扇区），取消可恢复原值；
@@ -373,18 +388,20 @@ STC 官方为 AI8051U 实验箱提供的完整 32-bit 模式示例代码，覆�
    （P4.2 / P4.3）或在 `Encoder_Tick()` 中取反计数。
 3. **TFPU 超频**：TFPU 工作于 120MHz，超过数据手册 108MHz 上限；
    若出现浮点异常，把 `TFPU_Init()` 的 PLL 档位/分频调整为 ≤108MHz。
-4. **串口**：UART1（P3.0/P3.1）与 UART4（P0.2/P0.3）均为 115200, 8N1
-   （STM32 原工程为 9600，上位机需同步修改）；两路波特率必须一致（共用定时器 2）。
+4. **主机接口**：USB-CDC（P3.0/P3.1）插 USB 线后电脑应出现 COMx（Win10 1903+/Win11 免驱）；
+   UART4（P0.2/P0.3）为 115200, 8N1（STM32 原工程为 9600，上位机需同步修改）。
+   USB-CDC 与波特率无关。
 5. **OLED 刷新**：整屏软件 I2C 刷新约 20ms，主循环含 `delay_ms(30)` 约 55–80ms；
    按键/编码器响应以此为上限，属正常现象。
 6. **PCA9685 供电**：舵机电源与 MCU 电源共地，舵机建议独立 5–6V 供电。
 7. **I2C 超时恢复**：`set_i2c_recover()` 只复位状态机与命令队列，不主动释放总线。
    若 PCA9685 板把 SDA 拉低导致每次写都跑满 20ms 超时，先断电重启；
    长期方案是加一段 9 个 SCL 时钟 + STOP 的总线释放。
-8. **栈深度**：`?STACK` 为默认 256B（EDATA 0x445–0x544，总 EDATA 1339B/2048B，
-   余 709B）。若上机出现异常复位或变量被踩，优先加大栈（本项目未使用递归）。
-9. **双路串口**：先只接 UART1 发 `help`，再把 USB-TTL 接到 UART4（P0.2/P0.3，注意 TX/RX 交叉）
-   发 `help`，两路应返回同样的菜单；两路同时连接时每条响应会各发一份（广播设计）。
+8. **栈深度**：`?STACK` 为默认 256B（EDATA 0x46C–0x56B，总 EDATA 1378B/2048B，
+   余 670B）。若上机出现异常复位或变量被踩，优先加大栈（本项目未使用递归）。
+9. **双路主机接口**：先用 USB 线连接电脑，打开虚拟串口发 `help`；
+   再把 USB-TTL 接到 UART4（P0.2/P0.3，注意 TX/RX 交叉）发 `help`，
+   两路应返回同样的菜单；两路同时连接时每条响应会各发一份（广播设计）。
 
 ---
 

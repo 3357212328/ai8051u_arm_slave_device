@@ -19,6 +19,8 @@
    - 仿真器会加载 `Objects\ai8051u_templete`，按 `debug_sim.ini` 执行命令，
      **最终停在 `main()` 第一行**（`main.c` 约 188 行，PC≈`0x0FF0046`）。
 4. 按 `F5`（Run）继续，程序会跑完初始化并进入主循环（每轮都会调用 `draw_ui()`）。
+   > ⚠️ 仿真器没有 USB 模型，直接跑会卡在 `usb_init()`；
+   > 请先按第三节第 5 条在 `uart.h` 打开 `UART_SIM_SKIP_USB` 再编译。
 5. 需要看变量时：`View → Watch Windows → Watch 1`。
    初始化文件已经加入 5 个常用表达式：
    `current_mode`、`g_sys_tick_count`、`active_servo_count`、`servo_angles[0]`、`OLED_DisplayBuf[0][0]`。
@@ -70,11 +72,23 @@ TCON = 0x10                         ; TR0 = 1，启动定时器
 4. **HIRCCR / IRC48MCR 稳定位、`T4IF` 等 XFR 状态位**
    仿真器不会置位。`Clock_Init()` 已改成带超时的等待（见 `main.c`），
    否则仿真会永远卡在 `while (!(HIRCCR & 1));`。
-5. **DHT11、编码器、按键、蜂鸣器、USB、DMA、串口（UART1/UART4）收发**
+5. **USB 外设（P3.0/P3.1）**
+   仿真器完全没有 USB 模型：`usb_init()` 里写 `USBADR` 后，其 bit7 忙位
+   永远不会清零，`while (USBADR & 0x80);` 会**死循环**（`IRC48MCR` 稳定位
+   也不会置位）。所以先用 Keil 仿真调试时，要在 `uart.h` 里把
+
+   ```c
+   //#define UART_SIM_SKIP_USB
+   ```
+
+   这一行的注释去掉、重新编译（跳过 `usb_init()`），调试完再改回来。
+   此时 `DeviceState` 恒为 0，USB 发送自动跳过、USB 接收永远无数据，
+   其余逻辑（菜单、按键注入、播放等）照常仿真。
+6. **DHT11、编码器、按键、蜂鸣器、DMA、串口（UART4）收发**
    都是纯 GPIO / 外设行为，仿真中读回固定电平：
    - DHT11 读失败，温湿度保持 0；
    - 编码器计数为 0，按键永远返回"无按键"；
-   - 串口发送只写 DMA 缓冲，收不到上位机数据（USB 也没有模型）；
+   - UART4 发送只写 DMA 缓冲，收不到上位机数据；
      因此 `key <...>` / `enc <n>` 远程控制命令只能在真机验证。
    界面切换、录制/播放流程适合用"改 Watch 变量 + 单步"的方式验证，
    例如直接把 `current_mode` 改成某个模式值，再单步看 `draw_ui()` 的分支。

@@ -1,32 +1,47 @@
 #include "uart.h"
 #include "set_uart.h"
 #include "set_io.h"
+#include "AI_USB.H"
 
 // ====================================================================
-// CLI 串口 (UART1 + UART4) — 基于 AI8051U 库函数 set_uart
+// CLI 主机接口 (USB-CDC + UART4) — 两路功能完全一致
 // --------------------------------------------------------------------
-// UART1: P3.0=RXD  / P3.1=TXD  (板载 USB 转串口)
-// UART4: P0.2=RXD4 / P0.3=TXD4 (第二路主机接口)
-// 两路接收独立维护行缓冲, 命令处理完全相同 (见 main.c)。
+// 第 1 路 USB-CDC: P3.0=D- / P3.1=D+, 由 STC USB 库 (stc_usb_cdc_32g.LIB)
+//                  实现, 电脑端识别为虚拟串口 (Win10 1903 以上免驱)。
+//                  P3.0/P3.1 由 USB 收发器直接驱动, 不能再配成 UART1 复用。
+//                  发送: 查询 bUsbInBusy, 按 64 字节分块调用 USB_SendData;
+//                  接收: 查询 bUsbOutReady, 从 UsbOutBuffer[OutNumber] 取数,
+//                        取完调用 usb_OUT_done() 释放 OUT 端点。
+// 第 2 路 UART4: P0.2=RXD4 / P0.3=TXD4, 115200 8N1。
 //
-// 发送: 库的 uart_printf 走 DMA, 发送忙时会丢弃数据, 因此
-//       UART_SendString 按块等待发送完成, 再把同一份内容广播到两路。
-// 接收: 库的 DMA 空闲超时中断触发 get_uart_state, 数据在
-//       _uart1_rx_buff[] / _uart4_rx_buff[] 中 (含 \r\n),
-//       这里剥离行结束符。
+// 发送: UART4 的库发送走 DMA, 发送忙时会丢数据, 因此按块等待后广播。
+// 接收: 两路都只往各自的行缓冲追加数据, 收到 \r/\n 才交给 CLI 解析。
 // ====================================================================
 
+/**
+ * @brief  第 1 路 CLI: USB-CDC 虚拟串口初始化 (P3.0=D- / P3.1=D+)
+ * @note   必须在 TFPU_Init() 之前调用: usb_init() 内部会写
+ *         `USBCLK = 0x00`, 把 TFPU 用的 PLL 倍频位清零。
+ *         USB 时钟必须用专门的 48MHz IRC: 本工程 PLL 给了 TFPU (120MHz),
+ *         PLLCLK/2 得不到 48MHz (见 AI8051U 手册 8.5.1 USBCKS 表)。
+ */
+void UART_UsbInit(void)
+{
+    IRCBAND |= 0x80;      /* USBCKS  = 1 */
+    IRCBAND &= ~0x40;     /* USBCKS2 = 0  ->  USB 时钟 = IRC48M */
+    /* usb_init() 会启动 IRC48M 并等待稳定, 配置端点并使能 USB 中断;
+       同时把 P3.0/P3.1 改成高阻输入, 交给 USB 收发器 */
+#ifndef UART_SIM_SKIP_USB
+    usb_init();
+#endif
+}
+
+/**
+ * @brief  第 2 路 CLI: UART4 初始化 (P0.2=RXD4 / P0.3=TXD4)
+ * @note   库的波特率计算用到浮点, 因此必须在 TFPU_Init() 之后调用。
+ */
 void UART_Init(void)
 {
-    /* --- 第 1 路: UART1 (P3.0/P3.1) --- */
-    set_uart_mode(Uart1, UART_BAUDRATE, Uart_End);
-    /* set_uart 库只配置了 UR1TOCR 的 ENTO/ENTOI 和 DMA，
-       但没有打开 CPU 级的串口1中断允许位 ES。
-       不开 ES，接收超时中断(向量4)永远不会进入，
-       uart_flag/rx_cnt 不会更新，CLI 将永远收不到命令。 */
-    ES = 1;
-
-    /* --- 第 2 路: UART4 (P0.2=RXD4 / P0.3=TXD4), 与 UART1 完全一致 --- */
     /* TXD4 配成推挽输出, 提高 115200 下的上升沿质量; RXD4 保持准双向口 */
     set_io_mode(pp_mode, Pin03, Pin_End);
     set_uart_mode(Uart4, UART_BAUDRATE, Uart4_P02_3, Uart_End);
@@ -35,9 +50,38 @@ void UART_Init(void)
 }
 
 /**
+ * @brief  USB-CDC 发送 (按 64 字节分块)
+ * @note   USB 未枚举完成 (DeviceState != CONFIGURED) 或上一包长时间发不出去时
+ *         放弃本次输出: CLI 在主循环里轮询, 不能在这里无限等待主机。
+ */
+static void UART_UsbSend(const char* str)
+{
+    const char* p = str;
+    uint16_t n;
+    uint16_t wait;
+
+    if (p == 0) return;
+
+    while (*p)
+    {
+        n = 0;
+        while (p[n] != '\0' && n < (uint16_t)USB_PACKET_SIZE) n++;
+
+        if (DeviceState != DEVSTATE_CONFIGURED) return;   /* 主机还没枚举完成 */
+
+        wait = USB_TX_WAIT;
+        while (bUsbInBusy && --wait) {}                   /* 等上一包发送完成 */
+        if (bUsbInBusy) return;                           /* 超时: 丢弃本包, 不阻塞 */
+
+        USB_SendData((BYTE *)p, (int)n);
+        p += n;
+    }
+}
+
+/**
  * @brief  单路发送字符串 (自动分块, 等待上一次 DMA 完成)
  * @note   UART4 的库发送缓冲只有 60 字节, 因此分块统一按
- *         UART_TX_CHUNK(48) 切分, 两路共用同一套逻辑。
+ *         UART_TX_CHUNK(48) 切分。
  */
 static void UART_SendPort(uart_name port, const char* str)
 {
@@ -64,49 +108,60 @@ static void UART_SendPort(uart_name port, const char* str)
 }
 
 /**
- * @brief  发送字符串 (同时广播到 UART1 + UART4)
+ * @brief  发送字符串 (同时广播到 USB-CDC + UART4)
  * @note   两路共用同一份 CLI 输出, 保证任一主机接口看到的内容一致
  */
 void UART_SendString(const char* str)
 {
-    UART_SendPort(Uart1, str);
+    UART_UsbSend(str);
     UART_SendPort(Uart4, str);
 }
 
-/* 每路独立的行缓冲, 跨 DMA 帧累积 */
+/* 每路独立的行缓冲, 跨 USB 包 / DMA 帧累积 */
 static char xdata s_rx_line[UART_PORT_COUNT][RX_BUFFER_SIZE];
 static uint8_t xdata s_rx_line_len[UART_PORT_COUNT] = {0, 0};
 
-static uart_name UART_HwPort(uint8_t port)
-{
-    return (port == UART_PORT_4) ? Uart4 : Uart1;
-}
-
-/* 把 DMA 收到的一帧追加到对应行缓冲; 返回 1=读到了新帧 */
+/**
+ * @brief  取一帧新数据追加到对应端口的行缓冲
+ * @retval 1=取到了新数据, 0=暂时没有新数据
+ */
 static uint8_t UART_LoadFrame(uint8_t port)
 {
-    char xdata *rx_buff;
-    uart_name hw = UART_HwPort(port);
-    int max_len;
     int len;
+    int max_len;
     int i;
+
+    if (port == UART_PORT_USB)
+    {
+        /* 查询方式: 主机把一包数据放进 UsbOutBuffer 后 bUsbOutReady=1 */
+        if (!bUsbOutReady) return 0;
+
+        len = (int)OutNumber;
+        if (len > (int)USB_PACKET_SIZE) len = (int)USB_PACKET_SIZE;
+        for (i = 0; i < len && s_rx_line_len[port] < (RX_BUFFER_SIZE - 1); i++)
+        {
+            s_rx_line[port][s_rx_line_len[port]++] = (char)UsbOutBuffer[i];
+        }
+        usb_OUT_done();                 /* 释放 OUT 端点, 允许接收下一包 */
+        return 1;
+    }
+
+    /* --- UART4: 库的 DMA 空闲超时中断把数据放到 _uart4_rx_buff[] --- */
+    max_len = (int)Uart4_Rx;
 
     // 关中断后再查询/拷贝, 避免新帧的 DMA 超时中断覆盖 rx_cnt/缓冲区
     EA = 0;
-    if (!get_uart_state(hw))
+    if (!get_uart_state(Uart4))
     {
         EA = 1;
         return 0;
     }
 
-    max_len = (port == UART_PORT_4) ? (int)Uart4_Rx : (int)Uart1_Rx;
-    rx_buff = (port == UART_PORT_4) ? _uart4_rx_buff : _uart1_rx_buff;
-
-    len = rx_cnt[hw];
+    len = rx_cnt[Uart4];
     if (len > max_len - 1) len = max_len - 1;
     for (i = 0; i < len && s_rx_line_len[port] < (RX_BUFFER_SIZE - 1); i++)
     {
-        s_rx_line[port][s_rx_line_len[port]++] = rx_buff[i];
+        s_rx_line[port][s_rx_line_len[port]++] = _uart4_rx_buff[i];
     }
     EA = 1;
     return 1;
@@ -115,9 +170,9 @@ static uint8_t UART_LoadFrame(uint8_t port)
 /**
  * @brief  从指定端口的行缓冲取出一行
  * @retval 2=取到非空命令, 1=消耗了一个空行, 0=还没有行结束符
- * @note   库的 DMA 空闲超时按"字节间隔"触发, 打字/分片发送时一帧可能
- *         只有半个命令行, 连续发送时一帧又可能包含多行。这里用行缓冲
- *         跨帧累积, 只有收到 \r/\n 才返回一条命令。
+ * @note   USB-CDC 一包最多 64 字节, UART4 的 DMA 空闲超时按"字节间隔"触发,
+ *         一帧可能只有半个命令行, 也可能包含多行。这里用行缓冲跨帧累积,
+ *         只有收到 \r/\n 才返回一条命令。
  */
 static uint8_t UART_TakeLine(uint8_t port, char* cmd_buffer)
 {

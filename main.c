@@ -294,27 +294,34 @@ void System_Hardware_Init(void)
     CKCON = 1;   // XRAM 访问+1T: 避免 UART DMA 与 CPU 同时访问 xdata 的总线冲突
     Clock_Init();
 
-    /* --- 2. TFPU 浮点协处理器: PLL 120MHz, 必须早于第一次浮点运算 --- */
+    /* --- 2. USB-CDC 虚拟串口 ---
+       必须早于 TFPU_Init: usb_init() 会把 USBCLK 的 PLL 倍频位清零,
+       晚调用会把 TFPU 的 120MHz PLL 关掉。 */
+    UART_UsbInit();
+
+    /* --- 3. TFPU 浮点协处理器: PLL 120MHz, 必须早于第一次浮点运算 --- */
     TFPU_Init();
 
-    /* --- 3. 通知各库函数主频 (屏蔽自动测量, 直接使用 40MHz) --- */
+    /* --- 4. 通知其余库函数主频 (屏蔽自动测量, 直接使用 40MHz) --- */
     set_timer_fosc(40000000UL);
     set_uart_fosc(40000000UL);
     set_i2c_fosc(40000000UL);
 
-    /* --- 4. 1ms 系统节拍 (g_sys_tick_count + 编码器) --- */
+    /* --- 5. UART4 (第二路 CLI): 库的波特率计算用到浮点, 放在 TFPU_Init 之后 --- */
+    UART_Init();
+
+    /* --- 6. 1ms 系统节拍 (g_sys_tick_count + 编码器) --- */
     set_timer_mode(Timer0, "1ms", Timer_End);
     set_timer_isr(Timer0, System_Tick_ISR);
 
-    EA = 1;  // 打开总中断 (I2C/UART DMA 均依赖中断)
+    EA = 1;  // 打开总中断 (USB/I2C/UART DMA 均依赖中断)
 
-    /* --- 5. 外设初始化 --- */
+    /* --- 7. 其它外设初始化 --- */
     PCA9685_Init();
     OLED_Init();
     Keypad_Init();
     Encoder_Init();
     Buzzer_Init();
-    UART_Init();
 
     Buzzer_Beep(50);
 }
@@ -575,7 +582,7 @@ void Check_And_Process_Serial(void)
     char cmd_buffer[RX_BUFFER_SIZE];
     uint8_t port;
 
-    /* UART1 与 UART4 功能完全一致: 两路都轮询, 响应广播回两路 */
+    /* USB-CDC 与 UART4 功能完全一致: 两路都轮询, 响应广播回两路 */
     for (port = 0; port < UART_PORT_COUNT; port++) {
         if (UART_GetCommand(port, cmd_buffer)) {
             process_serial_command(cmd_buffer);
@@ -594,7 +601,9 @@ void process_serial_command(char* cmd)
 
     if (strcmp(cmd, "help") == 0) {
         UART_SendString("--- Robotic Arm CLI ---\r\n");
-        UART_SendString("Ports: UART1 (P3.0/P3.1) + UART4 (P0.2/P0.3), 115200 8N1\r\n");
+        UART_SendString("Ports: USB-CDC (P3.0=D-/P3.1=D+) + UART4 (P0.2/P0.3)\r\n");
+        UART_SendString("USB-CDC: virtual COM port, ignores baud rate (USB 12Mbps)\r\n");
+        UART_SendString("UART4: 115200 8N1, both ports accept the same commands\r\n");
         UART_SendString("System: help, status, reset_arm, reset_system, sync on/off\r\n");
         UART_SendString("Manual: angle <s> <a> (s=servo 1-16, a=angle 0-180)\r\n");
         UART_SendString("Record: rec_step, rec_insert <i>, rec_delay <d>, rec_clear\r\n");
